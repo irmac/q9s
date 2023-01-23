@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log"
+
+	amqp "github.com/Azure/go-amqp"
 )
 
 func main() {
