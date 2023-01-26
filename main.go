@@ -3,41 +3,77 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
-
 	amqp "github.com/Azure/go-amqp"
+	"log"
+	"time"
 )
 
 func main() {
-	ctx := context.TODO()
-
-	conn, err := amqp.Dial("amqp://admin:admin@localhost:5672/", amqp.ConnSASLPlain("admin", "admin"))
+	// create connection
+	conn, err := amqp.Dial("amqp://localhost:5672", &amqp.ConnOptions{
+		SASLType: amqp.SASLTypePlain("admin", "admin"),
+	})
 	if err != nil {
-		log.Fatalf("Failed to connect to ActiveMQ: %v", err)
+		log.Fatal("Dialing AMQP server:", err)
 	}
 	defer conn.Close()
 
-	session, err := conn.NewSession()
-	if err != nil {
-		log.Fatalf("Failed to create a session: %v", err)
-	}
-	defer session.Close(ctx)
+	ctx := context.TODO()
 
-	receiver, err := session.NewReceiver(
-		amqp.LinkSourceAddress("test-queue"),
-		amqp.LinkCredit(10),
-	)
+	// open a session
+	session, err := conn.NewSession(ctx, nil)
 	if err != nil {
-		log.Fatalf("Failed to create a receiver: %v", err)
+		log.Fatal("Creating AMQP session:", err)
 	}
-	defer receiver.Close(ctx)
 
-	for i := 0; i < 10; i++ {
-		msg, err := receiver.Receive(ctx)
+	// send a message
+	{
+		// create a sender
+		sender, err := session.NewSender(ctx, "/ard-issue-instruction", nil)
 		if err != nil {
-			log.Fatalf("Failed to receive a message: %v", err)
+			log.Fatal("Creating sender link:", err)
 		}
 
-		fmt.Println("Received message:", string(msg.GetData()))
+		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+
+		// send message
+		err = sender.Send(ctx, amqp.NewMessage([]byte("Hello!")))
+		if err != nil {
+			log.Fatal("Sending message:", err)
+		}
+
+		sender.Close(ctx)
+		cancel()
+	}
+
+	// continuously read messages
+	{
+		// create a receiver
+		receiver, err := session.NewReceiver(ctx, "/ard-issue-instruction", &amqp.ReceiverOptions{
+			Credit: 10,
+		})
+		if err != nil {
+			log.Fatal("Creating receiver link:", err)
+		}
+		defer func() {
+			ctx, cancel := context.WithTimeout(ctx, 1*time.Second)
+			receiver.Close(ctx)
+			cancel()
+		}()
+
+		for {
+			// receive next message
+			msg, err := receiver.Receive(ctx)
+			if err != nil {
+				log.Fatal("Reading message from AMQP:", err)
+			}
+
+			// accept message
+			if err = receiver.AcceptMessage(context.TODO(), msg); err != nil {
+				log.Fatalf("Failure accepting message: %v", err)
+			}
+
+			fmt.Printf("Message received: %s\n", msg.GetData())
+		}
 	}
 }
